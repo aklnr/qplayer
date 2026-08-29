@@ -61,9 +61,6 @@ Item {
     // morph, title/artist stay put. Landscape has its own cover in the left chrome.
     PlaybackCoverImage {
         id: pCover
-        // Big centred art for no-lyric / instrumental tracks. On the lyrics↔cover switch
-        // it ZOOMS + FADES (SPlayer's zoom transition) — no big/small morph. Kept
-        // rendering while fading out so the zoom-out plays over the appearing lyrics.
         visible: !overlay.landscape && (overlay.coverOnly || opacity > 0.01)
         property real coverSize: Math.max(160, Math.min(overlay.width - 96, overlay.height - 360, 420))
         width: coverSize
@@ -83,21 +80,13 @@ Item {
             shadowOpacity: 0.46
             blurMax: 48
         }
-        // Only the resolved local cover path, not the coverUrl fallback: on a track
-        // switch coverPath clears to "" until the new art is ready, so the placeholder
-        // shows through (fadeIn) instead of the previous song's cover lingering.
         source: player.coverPath
-        // Zoom + fade in step with the host lyric column's own zoom (SPlayer's whole-
-        // content zoom): cover grows in as the lyrics shrink out, and vice versa.
         property bool shown: overlay.coverOnly && player.lyricSlide > 0.25
         opacity: shown ? 1 : 0
         baseScale: shown ? 1 : 0.95
         Behavior on opacity { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
         Behavior on baseScale { NumberAnimation { duration: 300; easing.type: Easing.OutBack } }
 
-        // Tap the cover to switch back to lyrics. A no-op when lyricsCoverOnly (no
-        // lyrics for this track) is what's actually forcing cover view — there's
-        // nothing to switch back to, so coverOnly just stays true either way.
         MouseArea {
             anchors.fill: parent
             onClicked: player.setCoverMode(false)
@@ -117,18 +106,6 @@ Item {
         onClicked: overlay.closeRequested()
     }
 
-    // Quick lyric-timing offset adjust: some LRC files don't quite line up with the
-    // audio, so this lets the offset be nudged without leaving the lyric page. A
-    // local panel, NOT an md3 Dialog: Dialog.open() reparents to the true QML root,
-    // but the host only re-renders THIS subtree (objectName "lyricChrome") while the
-    // lyric page fully covers the main scene — a reparented overlay would never draw.
-    //
-    // Top-right, mirroring backBtn's top-left: the host-drawn lyric column claims its
-    // own tap-to-seek/drag-to-scroll gesture over most of the body (LyricCompositor.
-    // lyricsScrollable) BEFORE QML ever sees the pointer event, so this corner is
-    // explicitly carved out there (OFFSET_BTN_CORNER_*) to keep the button itself
-    // reliably clickable; the panel's own content is exempted while open via
-    // lyricOffsetPanelOpen (see onOffsetPanelOpenChanged above).
     IconButton {
         id: offsetBtn
         anchors.top: parent.top
@@ -141,10 +118,6 @@ Item {
         onClicked: overlay.offsetPanelOpen = !overlay.offsetPanelOpen
     }
 
-    // Switch to cover view (issue #15: quick lyrics<->cover switching, à la 网易云).
-    // Hidden once already in cover view — tap the cover itself to come back. Same
-    // top row as offsetBtn, to its left — NOT stacked below (offsetPanel drops down
-    // from there and would overlap a button placed underneath).
     IconButton {
         id: coverModeBtn
         visible: !overlay.coverOnly
@@ -166,12 +139,8 @@ Item {
         onClicked: overlay.offsetPanelOpen = false
     }
 
-    // Fixed-step slider: one control scales cleanly down to phone width, unlike the
-    // previous row of four buttons which could overflow this card.
     Rectangle {
         id: offsetPanel
-        // Keep painting until the exit fade reaches zero; binding visible directly
-        // to offsetPanelOpen would cut the zoom-out off on its first frame.
         visible: overlay.offsetPanelOpen || opacity > 0.01
         opacity: overlay.offsetPanelOpen ? 1 : 0
         scale: overlay.offsetPanelOpen ? 1 : 0.9
@@ -249,9 +218,6 @@ Item {
             stepSize: 50
             snapMode: true
             value: 0
-            // Keep dragging entirely local. Updating PlayerController on every 50 ms
-            // step re-enters the QML tree (lyric index + persistence) during the
-            // pointer callback and interrupts the gesture in qml4j.
             onEditingFinished: player.setLyricOffset(value)
         }
 
@@ -327,13 +293,9 @@ Item {
         textColor: "#B3FFFFFF"
         fontSize: 14
     }
-    // Jump to the artist's page. Main.qml's page stack keeps the lyric route
-    // underneath and closes its separately-rendered host layer while the artist
-    // route is current; Back therefore returns here instead of losing context.
-    // Disabled (no pointer/tap) for local/custom tracks, which have no
-    // netease artist id to open.
     MouseArea {
         anchors.fill: artistText
+        visible: !overlay.landscape
         enabled: player.playingArtistId !== 0
         hoverEnabled: enabled
         cursorShape: Qt.PointingHandCursor
@@ -354,12 +316,6 @@ Item {
         anchors.rightMargin: 28
         height: 120
 
-        // progress (md3 wavy) + seek. The wavy phase is an infinite animation gated
-        // on the bar's OWN `visible` (control.visible) — own visibility is not the
-        // ancestor-effective one, so when the lyric page is closed (this whole
-        // overlay invisible) the bar's own visible stayed true and the animation
-        // kept ticking every frame, bumping the change version and defeating the
-        // renderer's idle layout-skip. Tie its visibility to the page being shown.
         LinearProgress {
             id: progress
             anchors.left: parent.left
@@ -368,7 +324,6 @@ Item {
             anchors.topMargin: 18
             wavy: settings.value("lyricProgressStyle") === 0
             visible: player.lyricSlide > 0.001
-            // While the next track loads, sweep instead of showing a frozen position.
             indeterminate: player.loading
             value: player.lyricProgress
         }
@@ -398,7 +353,6 @@ Item {
             fontSize: 11
         }
 
-        // transport buttons
         Row {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottom: parent.bottom
@@ -436,23 +390,16 @@ Item {
         }
     }
 
-    // --- landscape: cover + title + transport on the left -------------
-    // The host draws the lyrics in the right half (or, when coverOnly, nothing — and
-    // this column centers across the full width). Plain anchors, no positioner: the
-    // play clock republishes positionMs/lyricProgress ~5x/s and a Column/Layout here
-    // would re-run its distribution pass each of those frames (see MiniPlayer).
+    // --- landscape: cover + title + progress + artist + 5 buttons -----
     Item {
         id: landscapeChrome
         visible: overlay.landscape
         anchors.fill: parent
 
-        // Target region: half the page (cover left, lyrics right) or the whole width
-        // when there's no side lyric column. Like SPlayer's content-left, the cover
-        // column's centre-x AND size EASE between the two states (springy OutBack)
-        // rather than snapping when lyrics appear/disappear.
         readonly property real regionW: overlay.coverOnly ? overlay.width : overlay.width / 2
         readonly property real targetCoverSize:
-            Math.max(120, Math.min(regionW - 96, overlay.height - 248, 360))
+            Math.max(140, Math.min(regionW - 32, overlay.height - 140, 460))
+
         property real coverSize: targetCoverSize
         property real centerX: regionW / 2
         Behavior on coverSize { NumberAnimation { duration: 500; easing.type: Easing.OutBack } }
@@ -461,12 +408,13 @@ Item {
         Item {
             id: col
             width: landscapeChrome.coverSize
-            // cover + (title 26 + artist 18 + gaps + progress + labels + buttons 48).
-            height: landscapeChrome.coverSize + 196
             anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenterOffset: 8
+            height: lCover.height + lTitle.height + lProgress.height + lArtist.height + lRowContainer.height + 10
             anchors.horizontalCenter: parent.left
             anchors.horizontalCenterOffset: landscapeChrome.centerX
 
+            // 1. 封面
             PlaybackCoverImage {
                 id: lCover
                 anchors.top: parent.top
@@ -488,49 +436,31 @@ Item {
                     blurMax: 48
                 }
 
-                // Same tap-to-return as the portrait cover above; harmless (no-op)
-                // when already showing lyrics.
                 MouseArea {
                     anchors.fill: parent
                     onClicked: player.setCoverMode(false)
                 }
             }
+
+            // 2. 歌名
             MarqueeText {
                 id: lTitle
                 anchors.top: lCover.bottom
-                anchors.topMargin: 20
+                anchors.topMargin: 4
                 anchors.left: parent.left
                 anchors.right: parent.right
                 text: player.title
                 textColor: "#FFFFFFFF"
                 fontFamily: Theme.typography.titleLarge.family
-                fontSize: 20
+                fontSize: 16
                 centered: true
             }
-            MarqueeText {
-                id: lArtist
-                anchors.top: lTitle.bottom
-                anchors.topMargin: 4
-                anchors.left: parent.left
-                anchors.right: parent.right
-                text: player.artist
-                textColor: "#B3FFFFFF"
-                fontSize: 13
-                centered: true
-            }
-            MouseArea {
-                anchors.fill: lArtist
-                enabled: player.playingArtistId !== 0
-                hoverEnabled: enabled
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                    player.openArtist(player.playingArtistId)
-                }
-            }
+
+            // 3. 播放进度条
             LinearProgress {
                 id: lProgress
-                anchors.top: lArtist.bottom
-                anchors.topMargin: 22
+                anchors.top: lTitle.bottom
+                anchors.topMargin: 3
                 anchors.left: parent.left
                 anchors.right: parent.right
                 wavy: settings.value("lyricProgressStyle") === 0
@@ -538,6 +468,7 @@ Item {
                 indeterminate: player.loading
                 value: player.lyricProgress
             }
+
             MouseArea {
                 anchors.fill: lProgress
                 anchors.topMargin: -10
@@ -547,49 +478,116 @@ Item {
                 onPositionChanged: if (pressed && player.durationMs > 0)
                                        player.seek(Math.round(Math.max(0, Math.min(width, mouseX)) / width * player.durationMs))
             }
+
+            // 4. 时间文本与歌手名字
             Text {
+                id: lPos
                 anchors.left: parent.left
                 anchors.top: lProgress.bottom
-                anchors.topMargin: 6
+                anchors.topMargin: 1
+                width: 40
+                horizontalAlignment: Text.AlignLeft
                 text: overlay.fmt(player.positionMs)
                 color: "#B3FFFFFF"
-                fontSize: 11
+                fontSize: 10
             }
+
             Text {
+                id: lDur
                 anchors.right: parent.right
                 anchors.top: lProgress.bottom
-                anchors.topMargin: 6
+                anchors.topMargin: 1
+                width: 40
+                horizontalAlignment: Text.AlignRight
                 text: overlay.fmt(player.durationMs)
                 color: "#B3FFFFFF"
-                fontSize: 11
+                fontSize: 10
             }
-            Row {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                spacing: 18
+
+            MarqueeText {
+                id: lArtist
+                anchors.top: lProgress.bottom
+                anchors.topMargin: 1
+                anchors.left: lPos.right
+                anchors.right: lDur.left
+                text: player.artist
+                textColor: "#B3FFFFFF"
+                fontSize: 11
+                centered: true
+            }
+
+            MouseArea {
+                anchors.fill: lArtist
+                enabled: player.playingArtistId !== 0
+                hoverEnabled: enabled
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    player.openArtist(player.playingArtistId)
+                }
+            }
+
+            // 5. 按钮控制栏（向左右各自再外拓 8px）
+            Item {
+                id: lRowContainer
+                anchors.top: lArtist.bottom
+                anchors.topMargin: 2
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: -8
+                anchors.rightMargin: -8
+                height: 48
+                z: 10
+
+                readonly property real totalBtnsWidth: btn1.width + btn2.width + btn3.width + btn4.width + btn5.width
+                readonly property real gap: Math.max(0, (width - totalBtnsWidth) / 4)
+
                 IconButton {
+                    id: btn1
+                    anchors.left: parent.left
+                    anchors.verticalCenter: parent.verticalCenter
                     type: "standard"
                     icon: player.playMode === 1 ? "shuffle"
                           : (player.playMode === 2 ? "repeat_one" : "repeat")
                     contentColor: player.playMode === 0 ? "#99FFFFFF" : "#FF82B1FF"
                     onClicked: player.cyclePlayMode()
                 }
+
                 IconButton {
-                    type: "standard"; icon: "skip_previous"
+                    id: btn2
+                    anchors.left: btn1.right
+                    anchors.leftMargin: lRowContainer.gap
+                    anchors.verticalCenter: parent.verticalCenter
+                    type: "standard"
+                    icon: "skip_previous"
                     contentColor: "#FFFFFFFF"
                     onClicked: player.prev()
                 }
+
                 IconButton {
+                    id: btn3
+                    anchors.left: btn2.right
+                    anchors.leftMargin: lRowContainer.gap
+                    anchors.verticalCenter: parent.verticalCenter
                     type: "filled"
                     icon: player.playing ? "pause" : "play_arrow"
                     onClicked: player.toggle()
                 }
+
                 IconButton {
-                    type: "standard"; icon: "skip_next"
+                    id: btn4
+                    anchors.left: btn3.right
+                    anchors.leftMargin: lRowContainer.gap
+                    anchors.verticalCenter: parent.verticalCenter
+                    type: "standard"
+                    icon: "skip_next"
                     contentColor: "#FFFFFFFF"
                     onClicked: player.next()
                 }
+
                 IconButton {
+                    id: btn5
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
                     type: "standard"
                     enabled: player.currentLikeable
                     icon: player.currentLiked ? "favorite" : "favorite_border"
@@ -600,10 +598,9 @@ Item {
         }
     }
 
-    // The lyric page is composited in a separate host pass, above Main.qml's
-    // normal scene. Mirror transient notifications here so they remain visible.
     ToastStack {
         id: lyricSnack
         z: 100
     }
 }
+
